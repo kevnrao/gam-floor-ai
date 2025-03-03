@@ -1,12 +1,13 @@
 /**
- * Prebid.js Bid Monitoring & Google Ad Manager Unified Pricing Rule Adjuster
+ * Prebid.js Bid Monitoring & Google Ad Manager Unified Pricing Rule Adjuster 
  * 
  * Written by: Kevin Rao
  * 
  * Description:
- * - Monitors bid responses from Prebid.js in real time.
+ * - Monitors bid responses from Prebid.js in real-time.
  * - Analyzes historical bid data to determine optimal pricing.
  * - Adjusts bids 1 cent higher than needed to win while accounting for platform revenue.
+ * - Increases floor pricing by 15-20% during peak hours (7:30AM - 9:30AM, 4:30PM - 7:00PM).
  * - Updates Google Ad Manager Unified Pricing Rules dynamically.
  */
 
@@ -19,6 +20,28 @@
     let bidHistory = {}; // Stores bid history per ad unit
     const priceAdjustmentFactor = 0.01; // Adjust bid 1 cent higher than needed
     const revenueShare = 0.2; // Google takes 20% of the savings
+    const peakHourIncrease = 0.15; // 15% increase in floor price during peak hours
+
+    /**
+     * Checks if the current time falls within peak hours.
+     * Peak hours: 7:30AM - 9:30AM & 4:30PM - 7:00PM
+     * @returns {boolean} - Returns true if it's peak hours.
+     */
+    function isPeakHour() {
+        let now = new Date();
+        let hours = now.getHours();
+        let minutes = now.getMinutes();
+        let timeInMinutes = hours * 60 + minutes;
+
+        // Define peak hour ranges in minutes (e.g., 450 = 7:30 AM, 570 = 9:30 AM)
+        let morningPeakStart = 450; // 7:30 AM
+        let morningPeakEnd = 570;   // 9:30 AM
+        let eveningPeakStart = 990; // 4:30 PM
+        let eveningPeakEnd = 1140;  // 7:00 PM
+
+        return (timeInMinutes >= morningPeakStart && timeInMinutes <= morningPeakEnd) ||
+               (timeInMinutes >= eveningPeakStart && timeInMinutes <= eveningPeakEnd);
+    }
 
     /**
      * Listens for bid responses from Prebid.js and stores historical bid prices.
@@ -41,7 +64,7 @@
     });
 
     /**
-     * Adjusts the pricing rule based on bid history.
+     * Adjusts the pricing rule based on bid history and peak hour adjustments.
      * Ensures the bid is only 1 cent higher than required to win.
      * 
      * @param {string} adUnitCode - The ad unit being bid on.
@@ -59,6 +82,13 @@
         // Adjust bid: 1 cent higher than the required bid
         let optimalBid = requiredBid + priceAdjustmentFactor;
 
+        // Apply peak hour multiplier
+        if (isPeakHour()) {
+            let peakMultiplier = 1 + peakHourIncrease + (Math.random() * 0.05); // 15-20% increase
+            optimalBid *= peakMultiplier;
+            console.log(`🔺 Peak hour detected! Increasing floor price by ${((peakMultiplier - 1) * 100).toFixed(2)}%`);
+        }
+
         // Calculate savings
         let lastBid = sortedBids[sortedBids.length - 1];
         let savings = lastBid - optimalBid;
@@ -66,10 +96,10 @@
         let returnedToMedia = savings * (1 - revenueShare);
 
         console.log(`Updating bid strategy for ${adUnitCode}:`);
-        console.log(` - Required bid: $${requiredBid}`);
-        console.log(` - New optimal bid: $${optimalBid}`);
-        console.log(` - Platform revenue: $${platformRevenue}`);
-        console.log(` - Media reinvestment: $${returnedToMedia}`);
+        console.log(` - Required bid: $${requiredBid.toFixed(2)}`);
+        console.log(` - New optimal bid: $${optimalBid.toFixed(2)}`);
+        console.log(` - Platform revenue: $${platformRevenue.toFixed(2)}`);
+        console.log(` - Media reinvestment: $${returnedToMedia.toFixed(2)}`);
 
         // Send updated pricing rule to Google Ad Manager
         updateGoogleAdManagerPricing(adUnitCode, optimalBid);
@@ -95,12 +125,12 @@
         })
         .then(response => response.json())
         .then(data => {
-            console.log(`Updated Unified Pricing Rule for ${adUnitCode}:`, data);
+            console.log(`✅ Updated Unified Pricing Rule for ${adUnitCode}:`, data);
         })
         .catch(error => {
-            console.error(`Error updating pricing rule for ${adUnitCode}:`, error);
+            console.error(`❌ Error updating pricing rule for ${adUnitCode}:`, error);
         });
     }
 
-    console.log("Prebid.js bid monitoring script active. Written by Kevin Rao.");
+    console.log("🚀 pbjs bid monitoring script with peak hour adjustments active.");
 })();
