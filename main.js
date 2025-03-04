@@ -13,41 +13,26 @@
 
 (function () {
     if (!window.pbjs) {
-        console.warn("Prebid.js not found!");
+        console.warn("prebid.js not found!");
         return;
     }
 
-    let bidHistory = {}; // Stores bid history per ad unit
-    const priceAdjustmentFactor = 0.01; // Adjust bid 1 cent higher than needed
-    const revenueShare = 0.2; // Google takes 20% of the savings
-    const peakHourIncrease = 0.15; // 15% increase in floor price during peak hours
+    let bidHistory = {};
+    const priceAdjustmentFactor = 0.01; // Adjust bid 1 cent higher
+    const revenueShare = 0.2; // Google takes 20% of savings
+    const peakHourIncrease = 0.15;
+    const debugMode = false; // Toggle this for debugging logs
+    const bidExpirationTime = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
 
-    /**
-     * Checks if the current time falls within peak hours.
-     * Peak hours: 7:30AM - 9:30AM & 4:30PM - 7:00PM
-     * @returns {boolean} - Returns true if it's peak hours.
-     */
     function isPeakHour() {
         let now = new Date();
-        let hours = now.getHours();
-        let minutes = now.getMinutes();
-        let timeInMinutes = hours * 60 + minutes;
-
-        // Define peak hour ranges in minutes (e.g., 450 = 7:30 AM, 570 = 9:30 AM)
-        let morningPeakStart = 450; // 7:30 AM
-        let morningPeakEnd = 570;   // 9:30 AM
-        let eveningPeakStart = 990; // 4:30 PM
-        let eveningPeakEnd = 1140;  // 7:00 PM
-
-        return (timeInMinutes >= morningPeakStart && timeInMinutes <= morningPeakEnd) ||
-               (timeInMinutes >= eveningPeakStart && timeInMinutes <= eveningPeakEnd);
+        let timeInMinutes = now.getHours() * 60 + now.getMinutes();
+        return (
+            (timeInMinutes >= 450 && timeInMinutes <= 570) || // Morning: 7:30-9:30 AM
+            (timeInMinutes >= 990 && timeInMinutes <= 1140)  // Evening: 4:30-7:00 PM
+        );
     }
 
-    /**
-     * Listens for bid responses from Prebid.js and stores historical bid prices.
-     * 
-     * @param {Object} bid - The bid response object from Prebid.js.
-     */
     pbjs.onEvent('bidResponse', function (bid) {
         const { adUnitCode, cpm, bidder } = bid;
         
@@ -55,82 +40,79 @@
             bidHistory[adUnitCode] = [];
         }
 
-        // Store bid history for future price adjustments
-        bidHistory[adUnitCode].push(cpm);
+        // Store latest bid with timestamp
+        bidHistory[adUnitCode].push({ cpm, timestamp: Date.now() });
 
-        console.log(`Bid received from ${bidder} for ${adUnitCode}: $${cpm}`);
+        // Remove bids older than 24 hours
+        bidHistory[adUnitCode] = bidHistory[adUnitCode].filter(bid => (Date.now() - bid.timestamp) < bidExpirationTime);
 
+        debugLog(`Bid received from ${bidder} for ${adUnitCode}: $${cpm}`);
         adjustPricingRule(adUnitCode);
     });
 
-    /**
-     * Adjusts the pricing rule based on bid history and peak hour adjustments.
-     * Ensures the bid is only 1 cent higher than required to win.
-     * 
-     * @param {string} adUnitCode - The ad unit being bid on.
-     */
     function adjustPricingRule(adUnitCode) {
         if (!bidHistory[adUnitCode] || bidHistory[adUnitCode].length < 5) {
-            console.log(`Not enough data to adjust pricing for ${adUnitCode}`);
+            debugLog(`Not enough data to adjust pricing for ${adUnitCode}`);
             return;
         }
 
-        // Sort historical bids to determine the lowest winning bid
-        let sortedBids = [...bidHistory[adUnitCode]].sort((a, b) => a - b);
-        let requiredBid = sortedBids[Math.floor(sortedBids.length * 0.9)] || sortedBids[0]; // 90th percentile as clearing price
+        let sortedBids = bidHistory[adUnitCode]
+            .map(entry => entry.cpm)
+            .sort((a, b) => a - b);
 
-        // Adjust bid: 1 cent higher than the required bid
+        let requiredBid = sortedBids[Math.floor(sortedBids.length * 0.9)] || sortedBids[0];
+
         let optimalBid = requiredBid + priceAdjustmentFactor;
 
-        // Apply peak hour multiplier
         if (isPeakHour()) {
-            let peakMultiplier = 1 + peakHourIncrease + (Math.random() * 0.05); // 15-20% increase
+            let peakMultiplier = 1 + getPeakHourMultiplier(adUnitCode);
             optimalBid *= peakMultiplier;
-            console.log(`🔺 Peak hour detected! Increasing floor price by ${((peakMultiplier - 1) * 100).toFixed(2)}%`);
+            debugLog(`🔺 Peak hour! Increasing floor price by ${(peakMultiplier * 100).toFixed(2)}%`);
         }
 
-        // Calculate savings
         let lastBid = sortedBids[sortedBids.length - 1];
         let savings = lastBid - optimalBid;
         let platformRevenue = savings * revenueShare;
         let returnedToMedia = savings * (1 - revenueShare);
 
-        console.log(`Updating bid strategy for ${adUnitCode}:`);
-        console.log(` - Required bid: $${requiredBid.toFixed(2)}`);
-        console.log(` - New optimal bid: $${optimalBid.toFixed(2)}`);
-        console.log(` - Platform revenue: $${platformRevenue.toFixed(2)}`);
-        console.log(` - Media reinvestment: $${returnedToMedia.toFixed(2)}`);
+        debugLog(`Updating bid strategy for ${adUnitCode}:`);
+        debugLog(` - Required bid: $${requiredBid.toFixed(2)}`);
+        debugLog(` - New optimal bid: $${optimalBid.toFixed(2)}`);
+        debugLog(` - Platform revenue: $${platformRevenue.toFixed(2)}`);
+        debugLog(` - Media reinvestment: $${returnedToMedia.toFixed(2)}`);
 
-        // Send updated pricing rule to Google Ad Manager
+        // Round bid to the nearest 0.1 increment for targeting
+        let roundedBid = (Math.round(optimalBid * 10) / 10).toFixed(1);
+        pbjs.setTargeting(adUnitCode, { "upr-bid": roundedBid });
+
         updateGoogleAdManagerPricing(adUnitCode, optimalBid);
     }
 
-    /**
-     * Sends a request to update Google Ad Manager Unified Pricing Rules.
-     * 
-     * @param {string} adUnitCode - The ad unit to update pricing for.
-     * @param {number} newBidPrice - The new optimal bid price.
-     */
-    function updateGoogleAdManagerPricing(adUnitCode, newBidPrice) {
-        fetch('https://www.googleapis.com/admanager/v202302/UnifiedPricingRules', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer YOUR_ACCESS_TOKEN` // Replace with valid OAuth token
-            },
-            body: JSON.stringify({
-                adUnit: adUnitCode,
-                newPrice: newBidPrice
-            })
-        })
-        .then(response => response.json())
-        .then(data => {
-            console.log(`✅ Updated Unified Pricing Rule for ${adUnitCode}:`, data);
-        })
-        .catch(error => {
-            console.error(`❌ Error updating pricing rule for ${adUnitCode}:`, error);
-        });
+    function getPeakHourMultiplier(adUnitCode) {
+        if (!bidHistory[adUnitCode] || bidHistory[adUnitCode].length < 5) {
+            return peakHourIncrease; // Default multiplier if no data
+        }
+
+        let bidValues = bidHistory[adUnitCode]
+            .filter(entry => (Date.now() - entry.timestamp) < bidExpirationTime)
+            .map(entry => entry.cpm);
+
+        let averageBid = bidValues.reduce((sum, bid) => sum + bid, 0) / bidValues.length;
+
+        // Use a multiplier based on past 24-hour bidding trends
+        let calculatedMultiplier = peakHourIncrease + (averageBid * 0.01);
+        return Math.min(calculatedMultiplier, 0.2); // Cap at 20%
     }
 
-    console.log("🚀 pbjs bid monitoring script with peak hour adjustments active.");
+    function updateGoogleAdManagerPricing(adUnitCode, newBidPrice) {
+        console.warn(`🚨 Google Ad Manager API integration required!`);
+        debugLog(`Would update ${adUnitCode} price to: $${newBidPrice}`);
+        // Implement OAuth2 token refresh and call Google Ad Manager API from a secure backend.
+    }
+
+    function debugLog(message) {
+        if (debugMode) console.log(message);
+    }
+
+    console.log("🚀 pbjs bid monitoring script with 24-hour bid history and peak hour adjustments active.");
 })();
