@@ -25,8 +25,8 @@
         peakHourMultiplierBase: 0.15, // Default 15% increase
         peakHourCap: 0.25, // Increased max cap to 25%
         peakHours: [
-            { start: 450, end: 570 },  // Morning: 7:30 AM – 9:30 AM (in minutes)
-            { start: 990, end: 1140 }  // Evening: 4:30 PM – 7:00 PM (in minutes)
+            { start: 450, end: 570 },  // Morning: 7:30 AM – 9:30 AM in minutes
+            { start: 990, end: 1140 }  // Evening: 4:30 PM – 7:00 PM in minutes
         ],
         debugMode: false // Toggle debugging logs
     };
@@ -35,6 +35,11 @@
         let now = new Date();
         let timeInMinutes = now.getHours() * 60 + now.getMinutes();
         return config.peakHours.some(({ start, end }) => timeInMinutes >= start && timeInMinutes <= end);
+    }
+
+    function isPrebidBidding(adUnitCode) {
+        const targeting = pbjs.getTargetingForAdUnitCode(adUnitCode);
+        return targeting && targeting["hb_pb"];
     }
 
     pbjs.onEvent('bidResponse', function (bid) {
@@ -50,77 +55,53 @@
         bidHistory[adUnitCode] = bidHistory[adUnitCode].filter(bid => (Date.now() - bid.timestamp) < bidExpirationTime);
 
         debugLog(`Bid received from ${bidder} for ${adUnitCode}: $${cpm}`);
-        adjustPricingRule(adUnitCode);
+
+        if (isPrebidBidding(adUnitCode)) {
+            adjustPricingRule(adUnitCode);
+        } else {
+            debugLog(`Prebid.js is not bidding on ${adUnitCode}, skipping adjustments.`);
+        }
     });
 
-    function adjustPricingRule(adUnitCode) {
-        if (!bidHistory[adUnitCode] || bidHistory[adUnitCode].length < 5) {
-            debugLog(`Not enough data to adjust pricing for ${adUnitCode}`);
-            return;
-        }
-
-        let sortedBids = bidHistory[adUnitCode]
-            .map(entry => entry.cpm)
-            .sort((a, b) => a - b);
-
-        let requiredBid = sortedBids[Math.floor(sortedBids.length * 0.9)] || sortedBids[0];
-        let optimalBid = requiredBid + config.priceAdjustmentFactor;
-
-        if (isPeakHour()) {
-            let peakMultiplier = 1 + getPeakHourMultiplier(adUnitCode);
-            optimalBid *= peakMultiplier;
-            debugLog(`🔺 Peak hour! Increasing floor price by ${(peakMultiplier * 100).toFixed(2)}%`);
-        }
-
-        debugLog(`Updating bid strategy for ${adUnitCode}:`);
-        debugLog(` - Required bid: $${requiredBid.toFixed(2)}`);
-        debugLog(` - New optimal bid: $${optimalBid.toFixed(2)}`);
-
-        let roundedBid = roundBid(optimalBid);
-        pbjs.setTargeting(adUnitCode, { "hb_pb": roundedBid });
-
-        updateGoogleAdManagerPricing(adUnitCode, optimalBid);
-    }
-
-    function getPeakHourMultiplier(adUnitCode) {
-        if (!bidHistory[adUnitCode] || bidHistory[adUnitCode].length < 5) {
-            return config.peakHourMultiplierBase; // Default if no data
-        }
-
-        let bidValues = bidHistory[adUnitCode]
-            .filter(entry => (Date.now() - entry.timestamp) < bidExpirationTime)
-            .map(entry => entry.cpm);
-
-        let averageBid = bidValues.reduce((sum, bid) => sum + bid, 0) / bidValues.length;
-        let bidStandardDeviation = Math.sqrt(
-            bidValues.reduce((sum, bid) => sum + Math.pow(bid - averageBid, 2), 0) / bidValues.length
-        );
-        
-        let calculatedMultiplier = config.peakHourMultiplierBase + (bidStandardDeviation * 0.02);
-        return Math.min(calculatedMultiplier, config.peakHourCap);
-    }
-
-    function roundBid(optimalBid) {
-        if (optimalBid < 5) {
-            return (Math.round(optimalBid * 100) / 100).toFixed(2); // $0.01 increment
-        } else if (optimalBid < 10) {
-            return (Math.round(optimalBid * 20) / 20).toFixed(2); // $0.05 increment
-        } else {
-            return (Math.round(optimalBid * 10) / 10).toFixed(1); // $0.1 increment
-        }
-    }
-
-    function updateGoogleAdManagerPricing(adUnitCode, newBidPrice) {
-        console.warn("🚨 Google Ad Manager API integration required!");
+    async function updateGoogleAdManagerPricing(adUnitCode, newBidPrice) {
+        console.warn("GAM API integration required!");
         debugLog(`Would update ${adUnitCode} price to: $${newBidPrice}`);
-        // Implement OAuth2 token refresh and call Google Ad Manager API from a secure backend.
+        
+        const accessToken = await getOAuthToken();
+        const UPR_API_URL = `https://www.googleapis.com/dfp/v202311/PricingRuleService/updatePricingRules`;
+
+        const pricingRuleData = {
+            adUnitCode: adUnitCode,
+            newPrice: newBidPrice
+        };
+
+        try {
+            const response = await fetch(UPR_API_URL, {
+                method: "POST",
+                headers: {
+                    "Authorization": `Bearer ${accessToken}`,
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify(pricingRuleData)
+            });
+
+            if (response.ok) {
+                debugLog(`UPR updated for ${adUnitCode}: $${newBidPrice}`);
+            } else {
+                console.error("❌ Failed to update UPR", await response.text());
+            }
+        } catch (error) {
+            console.error("❌ Error updating UPR:", error);
+        }
     }
 
-    function debugLog(message) {
-        if (config.debugMode) console.log(message);
+    async function getOAuthToken() {
+        // Placeholder for actual OAuth token retrieval logic
+        return "YOUR_ACCESS_TOKEN"; // Replace with secure token retrieval
     }
 
-    console.log("pbjs bid optimization script with configurable settings active.");
+    console.log("pbjs bid optimisation script with configurable settings and UPR updates active.");
 })();
+
 
 
