@@ -18,18 +18,23 @@
     }
 
     let bidHistory = {};
-    const priceAdjustmentFactor = 0.01; // Adjust bid 1 cent higher
-    const peakHourIncrease = 0.15;
-    const debugMode = false; // Toggle this for debugging logs
     const bidExpirationTime = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
+
+    const config = {
+        priceAdjustmentFactor: 0.01, // Default $0.01 increase
+        peakHourMultiplierBase: 0.15, // Default 15% increase
+        peakHourCap: 0.25, // Increased max cap to 25%
+        peakHours: [
+            { start: 450, end: 570 },  // Morning: 7:30 AM – 9:30 AM (in minutes)
+            { start: 990, end: 1140 }  // Evening: 4:30 PM – 7:00 PM (in minutes)
+        ],
+        debugMode: false // Toggle debugging logs
+    };
 
     function isPeakHour() {
         let now = new Date();
         let timeInMinutes = now.getHours() * 60 + now.getMinutes();
-        return (
-            (timeInMinutes >= 450 && timeInMinutes <= 570) || // Morning: 7:30-9:30 AM
-            (timeInMinutes >= 990 && timeInMinutes <= 1140)  // Evening: 4:30-7:00 PM
-        );
+        return config.peakHours.some(({ start, end }) => timeInMinutes >= start && timeInMinutes <= end);
     }
 
     pbjs.onEvent('bidResponse', function (bid) {
@@ -39,10 +44,9 @@
             bidHistory[adUnitCode] = [];
         }
 
-        // Store latest bid with timestamp
         bidHistory[adUnitCode].push({ cpm, timestamp: Date.now() });
 
-        // Remove bids older than 24 hours
+        // Remove expired bids
         bidHistory[adUnitCode] = bidHistory[adUnitCode].filter(bid => (Date.now() - bid.timestamp) < bidExpirationTime);
 
         debugLog(`Bid received from ${bidder} for ${adUnitCode}: $${cpm}`);
@@ -60,8 +64,7 @@
             .sort((a, b) => a - b);
 
         let requiredBid = sortedBids[Math.floor(sortedBids.length * 0.9)] || sortedBids[0];
-
-        let optimalBid = requiredBid + priceAdjustmentFactor;
+        let optimalBid = requiredBid + config.priceAdjustmentFactor;
 
         if (isPeakHour()) {
             let peakMultiplier = 1 + getPeakHourMultiplier(adUnitCode);
@@ -73,16 +76,7 @@
         debugLog(` - Required bid: $${requiredBid.toFixed(2)}`);
         debugLog(` - New optimal bid: $${optimalBid.toFixed(2)}`);
 
-        // **New Rounding Logic for `hb_pb` (Prebid Standard)**
-        let roundedBid;
-        if (optimalBid < 5) {
-            roundedBid = (Math.round(optimalBid * 100) / 100).toFixed(2); // $0.01 increment
-        } else if (optimalBid < 10) {
-            roundedBid = (Math.round(optimalBid * 20) / 20).toFixed(2); // $0.05 increment
-        } else {
-            roundedBid = (Math.round(optimalBid * 10) / 10).toFixed(1); // $0.1 increment
-        }
-
+        let roundedBid = roundBid(optimalBid);
         pbjs.setTargeting(adUnitCode, { "hb_pb": roundedBid });
 
         updateGoogleAdManagerPricing(adUnitCode, optimalBid);
@@ -90,7 +84,7 @@
 
     function getPeakHourMultiplier(adUnitCode) {
         if (!bidHistory[adUnitCode] || bidHistory[adUnitCode].length < 5) {
-            return peakHourIncrease; // Default multiplier if no data
+            return config.peakHourMultiplierBase; // Default if no data
         }
 
         let bidValues = bidHistory[adUnitCode]
@@ -98,22 +92,35 @@
             .map(entry => entry.cpm);
 
         let averageBid = bidValues.reduce((sum, bid) => sum + bid, 0) / bidValues.length;
+        let bidStandardDeviation = Math.sqrt(
+            bidValues.reduce((sum, bid) => sum + Math.pow(bid - averageBid, 2), 0) / bidValues.length
+        );
+        
+        let calculatedMultiplier = config.peakHourMultiplierBase + (bidStandardDeviation * 0.02);
+        return Math.min(calculatedMultiplier, config.peakHourCap);
+    }
 
-        // Use a multiplier based on past 24-hour bidding trends
-        let calculatedMultiplier = peakHourIncrease + (averageBid * 0.01);
-        return Math.min(calculatedMultiplier, 0.2); // Cap at 20%
+    function roundBid(optimalBid) {
+        if (optimalBid < 5) {
+            return (Math.round(optimalBid * 100) / 100).toFixed(2); // $0.01 increment
+        } else if (optimalBid < 10) {
+            return (Math.round(optimalBid * 20) / 20).toFixed(2); // $0.05 increment
+        } else {
+            return (Math.round(optimalBid * 10) / 10).toFixed(1); // $0.1 increment
+        }
     }
 
     function updateGoogleAdManagerPricing(adUnitCode, newBidPrice) {
-        console.warn(`🚨 Google Ad Manager API integration required!`);
+        console.warn("🚨 Google Ad Manager API integration required!");
         debugLog(`Would update ${adUnitCode} price to: $${newBidPrice}`);
         // Implement OAuth2 token refresh and call Google Ad Manager API from a secure backend.
     }
 
     function debugLog(message) {
-        if (debugMode) console.log(message);
+        if (config.debugMode) console.log(message);
     }
 
-    console.log("🚀 pbjs bid monitoring script with 24-hour bid history using hb_pb targeting active.");
+    console.log("pbjs bid optimization script with configurable settings active.");
 })();
+
 
