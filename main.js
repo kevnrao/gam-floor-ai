@@ -13,13 +13,12 @@
 
 (function () {
     if (!window.pbjs) {
-        console.warn("prebid.js not found!");
+        console.warn("pbjs not found!");
         return;
     }
 
     let bidHistory = {};
     const priceAdjustmentFactor = 0.01; // Adjust bid 1 cent higher
-    const revenueShare = 0.2; // Google takes 20% of savings
     const peakHourIncrease = 0.15;
     const debugMode = false; // Toggle this for debugging logs
     const bidExpirationTime = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
@@ -70,20 +69,21 @@
             debugLog(`🔺 Peak hour! Increasing floor price by ${(peakMultiplier * 100).toFixed(2)}%`);
         }
 
-        let lastBid = sortedBids[sortedBids.length - 1];
-        let savings = lastBid - optimalBid;
-        let platformRevenue = savings * revenueShare;
-        let returnedToMedia = savings * (1 - revenueShare);
-
         debugLog(`Updating bid strategy for ${adUnitCode}:`);
         debugLog(` - Required bid: $${requiredBid.toFixed(2)}`);
         debugLog(` - New optimal bid: $${optimalBid.toFixed(2)}`);
-        debugLog(` - Platform revenue: $${platformRevenue.toFixed(2)}`);
-        debugLog(` - Media reinvestment: $${returnedToMedia.toFixed(2)}`);
 
-        // Round bid to the nearest 0.1 increment for targeting
-        let roundedBid = (Math.round(optimalBid * 10) / 10).toFixed(1);
-        pbjs.setTargeting(adUnitCode, { "upr-bid": roundedBid });
+        // **New Rounding Logic for `hb_pb` (Prebid Standard)**
+        let roundedBid;
+        if (optimalBid < 5) {
+            roundedBid = (Math.round(optimalBid * 100) / 100).toFixed(2); // $0.01 increment
+        } else if (optimalBid < 10) {
+            roundedBid = (Math.round(optimalBid * 20) / 20).toFixed(2); // $0.05 increment
+        } else {
+            roundedBid = (Math.round(optimalBid * 10) / 10).toFixed(1); // $0.1 increment
+        }
+
+        pbjs.setTargeting(adUnitCode, { "hb_pb": roundedBid });
 
         updateGoogleAdManagerPricing(adUnitCode, optimalBid);
     }
@@ -114,5 +114,6 @@
         if (debugMode) console.log(message);
     }
 
-    console.log("🚀 pbjs bid monitoring script with 24-hour bid history and peak hour adjustments active.");
+    console.log("🚀 pbjs bid monitoring script with 24-hour bid history using hb_pb targeting active.");
 })();
+
