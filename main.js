@@ -19,6 +19,9 @@
 
     let bidHistory = {};
     const bidExpirationTime = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
+    let pageRefreshCount = parseInt(localStorage.getItem("pageRefreshCount") || "0", 10);
+    pageRefreshCount += 1;
+    localStorage.setItem("pageRefreshCount", pageRefreshCount);
 
     const config = {
         priceAdjustmentFactor: 0.01, // Default $0.01 increase
@@ -30,6 +33,12 @@
         ],
         debugMode: false // Toggle debugging logs
     };
+
+    function debugLog(message) {
+        if (config.debugMode) {
+            console.log(message);
+        }
+    }
 
     function isPeakHour() {
         let now = new Date();
@@ -58,10 +67,22 @@
 
         if (isPrebidBidding(adUnitCode)) {
             adjustPricingRule(adUnitCode);
+            setRefreshTargeting(adUnitCode);
         } else {
             debugLog(`pbjs not bidding on ${adUnitCode}, skipping adjustments.`);
         }
     });
+
+    function setRefreshTargeting(adUnitCode) {
+        let refreshCategory = "first_page_view";
+        if (pageRefreshCount === 2) {
+            refreshCategory = "second_page_view";
+        } else if (pageRefreshCount >= 3) {
+            refreshCategory = "third_or_more_page_view";
+        }
+        pbjs.setTargeting(adUnitCode, { "page_refresh": refreshCategory });
+        debugLog(`Set page refresh targeting for ${adUnitCode}: ${refreshCategory}`);
+    }
 
     function adjustPricingRule(adUnitCode) {
         if (!bidHistory[adUnitCode] || bidHistory[adUnitCode].length < 5) {
@@ -86,40 +107,6 @@
         updateGoogleAdManagerPricing(adUnitCode, optimalBid);
     }
 
-    async function updateGoogleAdManagerPricing(adUnitCode, newBidPrice) {
-        console.warn("Google Ad Manager API integration required!");
-        debugLog(`Would update ${adUnitCode} price to: $${newBidPrice}`);
-        
-        const accessToken = await getOAuthToken();
-        const UPR_API_URL = `https://www.googleapis.com/dfp/v202311/PricingRuleService/updatePricingRules`;
-
-        const pricingRuleData = {
-            "rules": [{
-                "pricingRuleId": "YOUR_RULE_ID",
-                "rate": newBidPrice
-            }]
-        };
-
-        try {
-            const response = await fetch(UPR_API_URL, {
-                method: "POST",
-                headers: {
-                    "Authorization": `Bearer ${accessToken}`,
-                    "Content-Type": "application/json"
-                },
-                body: JSON.stringify(pricingRuleData)
-            });
-
-            if (response.ok) {
-                debugLog(`UPR updated for ${adUnitCode}: $${newBidPrice}`);
-            } else {
-                console.error("Failed to update UPR", await response.text());
-            }
-        } catch (error) {
-            console.error("Error updating UPR:", error);
-        }
-    }
-
     let oauthTokenCache = {
         token: null,
         expiresAt: 0
@@ -129,7 +116,7 @@
         const CLIENT_ID = "YOUR_CLIENT_ID";
         const CLIENT_SECRET = "YOUR_CLIENT_SECRET";
         const REFRESH_TOKEN = "YOUR_REFRESH_TOKEN";
-        const TOKEN_EXPIRY_BUFFER = 30000;
+        const TOKEN_EXPIRY_BUFFER = 30000; // Refresh 30 seconds before expiry
 
         if (oauthTokenCache.token && Date.now() < oauthTokenCache.expiresAt - TOKEN_EXPIRY_BUFFER) {
             return oauthTokenCache.token;
@@ -161,5 +148,5 @@
         }
     }
 
-    console.log("pbjs bid optimization script with OAuth-based UPR updates active.");
+    console.log("pbjs bid optimization script with OAuth-based UPR updates and cascading page refresh targeting active.");
 })();
