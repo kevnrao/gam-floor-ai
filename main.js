@@ -107,37 +107,44 @@
         updateGoogleAdManagerPricing(adUnitCode, optimalBid);
     }
 
-    async function updateGoogleAdManagerPricing(adUnitCode, newBidPrice) {
-        console.warn("Google Ad Manager API integration required!");
-        debugLog(`Would update ${adUnitCode} price to: $${newBidPrice}`);
-        
-        const accessToken = await getOAuthToken();
-        const UPR_API_URL = `https://www.googleapis.com/dfp/v202311/PricingRuleService/updatePricingRules`;
+    let oauthTokenCache = {
+        token: null,
+        expiresAt: 0
+    };
 
-        const pricingRuleData = {
-            "rules": [{
-                "pricingRuleId": "YOUR_RULE_ID",
-                "rate": newBidPrice
-            }]
-        };
+    async function getOAuthToken() {
+        const CLIENT_ID = "YOUR_CLIENT_ID";
+        const CLIENT_SECRET = "YOUR_CLIENT_SECRET";
+        const REFRESH_TOKEN = "YOUR_REFRESH_TOKEN";
+        const TOKEN_EXPIRY_BUFFER = 30000; // Refresh 30 seconds before expiry
+
+        if (oauthTokenCache.token && Date.now() < oauthTokenCache.expiresAt - TOKEN_EXPIRY_BUFFER) {
+            return oauthTokenCache.token;
+        }
 
         try {
-            const response = await fetch(UPR_API_URL, {
+            const response = await fetch("https://oauth2.googleapis.com/token", {
                 method: "POST",
-                headers: {
-                    "Authorization": `Bearer ${accessToken}`,
-                    "Content-Type": "application/json"
-                },
-                body: JSON.stringify(pricingRuleData)
+                headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                body: new URLSearchParams({
+                    client_id: CLIENT_ID,
+                    client_secret: CLIENT_SECRET,
+                    refresh_token: REFRESH_TOKEN,
+                    grant_type: "refresh_token",
+                }),
             });
 
-            if (response.ok) {
-                debugLog(`UPR updated for ${adUnitCode}: $${newBidPrice}`);
+            const data = await response.json();
+            if (data.access_token) {
+                oauthTokenCache.token = data.access_token;
+                oauthTokenCache.expiresAt = Date.now() + (data.expires_in * 1000);
+                return data.access_token;
             } else {
-                console.error("Failed to update UPR", await response.text());
+                throw new Error("Failed to retrieve access token");
             }
         } catch (error) {
-            console.error("Error updating UPR:", error);
+            console.error("Error retrieving OAuth token:", error);
+            return null;
         }
     }
 
